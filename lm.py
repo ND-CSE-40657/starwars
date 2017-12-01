@@ -86,10 +86,8 @@ def make_kneserney(data, n):
                     v = ("</s>",)
                 else:
                     v = u+(w,)
-                    j = i+1
-                    while j > 0 and (j >= n or v not in kn[j]._prob):
+                    while len(v) > 0 and (len(v) >= n or v not in kn[len(v)+1]._prob):
                         v = v[1:]
-                        j -= 1
                 m.add_transition(fst.Transition(u, (w, w), v), kn[i]._prob[u][w])
     return m
 
