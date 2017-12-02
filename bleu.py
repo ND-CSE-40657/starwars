@@ -51,6 +51,7 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser()
     argparser.add_argument('test', metavar='predict', help='predicted translations')
     argparser.add_argument('gold', metavar='true', help='true translations')
+    argparser.add_argument('-n', help='maximum n-gram size to score', default=4, type=int)
     args = argparser.parse_args()
 
     test = [line.split() for line in open(args.test)]
@@ -58,6 +59,6 @@ if __name__ == "__main__":
 
     c = zero()
     for t, g in zip(test, gold):
-        c += count(t, g)
-    print("BLEU:", score(c))
+        c += count(t, g, n=args.n)
+    print("BLEU:", score(c, n=args.n))
     
