@@ -1,3 +1,7 @@
+"""Some neural network layers that you can use in building your translation system.
+
+Many of these layers are tailored for low-resource translation (thanks to Toan Nguyen)."""
+
 import torch
 
 def bmv(w, x):
@@ -64,17 +68,21 @@ class Embedding(torch.nn.Module):
 class RNN(torch.nn.Module):
     """Simple recurrent neural network.
 
-    Argument:
+    The constructor takes one argument:
         dims: Size of both the input and output vectors (int)
+
+    The resulting RNN object can be used in two ways:
+      - Step by step, using start() and step()
+      - On a whole sequence at once, using sequence()
+    Please see the documentation for those methods.
     """
     
     def __init__(self, dims):
         super().__init__()
-        self.h0 = torch.nn.Parameter(torch.empty(dims))
+        self.h0 = torch.zeros(dims)
         self.W_hi = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_hh = torch.nn.Parameter(torch.empty(dims, dims))
         self.b = torch.nn.Parameter(torch.empty(dims))
-        torch.nn.init.normal_(self.h0, std=0.01)
         torch.nn.init.normal_(self.W_hi, std=0.01)
         torch.nn.init.normal_(self.W_hh, std=0.01)
         torch.nn.init.normal_(self.b, std=0.01)
@@ -147,7 +155,7 @@ class TanhLayer(torch.nn.Module):
         input_dims:  Size of input vectors (int)
         output_dims: Size of output vectors (int)
 
-    The resulting TanhLayer object is called. See forward().
+    The resulting TanhLayer object is callable. See forward().
     """
     def __init__(self, input_dims, output_dims):
         super().__init__()
@@ -216,7 +224,7 @@ class SoftmaxLayer(torch.nn.Module):
         if inp.size()[-1] != input_dims:
             raise TypeError(f"The inputs must have size {input_dims}")
         
-        # Scaling both the output embeddings and the logits
+        # Scaling both the output embeddings and the inputs
         # to have norm 1 and 10, respectively, helps against overfitting.
         # https://www.aclweb.org/anthology/N18-1031/
         W = torch.nn.functional.normalize(self.W, dim=1)
@@ -254,12 +262,13 @@ def attention(query, keys, vals):
         raise TypeError("There must be the same number of keys and values (second-to-last axis)")
 
     logits = query @ keys.transpose(-2, -1)  # m,n
+    logits /= keys.size()[-1] ** 0.5
     aweights = torch.softmax(logits, dim=-1) # m,n
-    context = aweights @ vals                # m,d
+    context = aweights @ vals                # m,d'
     return context
 
 class SelfAttention(torch.nn.Module):
-    """Self-attention layer.
+    """Self-attention layer, for use in an encoder.
 
     The SelfAttention constructor takes one argument:
         dims: Size of input and output vectors (int)
@@ -303,3 +312,53 @@ class SelfAttention(torch.nn.Module):
         outputs = outputs + inputs
         
         return outputs
+
+class MaskedSelfAttention(torch.nn.Module):
+    """Masked self-attention layer, for use in a decoder.
+
+    The MaskedSelfAttention constructor takes one argument:
+        dims: Size of input and output vectors (int)
+
+    The resulting object has start() and step() methods; please see
+    documentation for those methods.
+    """
+    
+    def __init__(self, dims):
+        super().__init__()
+        self.W_Q = torch.nn.Parameter(torch.empty(dims, dims))
+        self.W_K = torch.nn.Parameter(torch.empty(dims, dims))
+        self.W_V = torch.nn.Parameter(torch.empty(dims, dims))
+        self.empty = torch.empty((0, dims))
+        torch.nn.init.normal_(self.W_Q, std=0.01)
+        torch.nn.init.normal_(self.W_K, std=0.01)
+        torch.nn.init.normal_(self.W_V, std=0.01)
+
+    def start(self):
+        """Return the initial list of previous inputs.
+
+        For MaskedSelfAttention, the "state" is the list of previous
+        inputs. This list is initially empty.
+        """
+        return self.empty
+
+    def step(self, prev_inps, inp):
+        """Run one step of masked self-attention:
+
+        1. Read in an input vector and append it to the list of previous inputs.
+        2. Compute an output vector based on the new list of inputs.
+        """
+        inputs = torch.cat([prev_inps, inp.unsqueeze(0)], dim=0)
+        
+        # Linearly transform inputs in three ways to get queries, keys, values
+        query = bmv(self.W_Q, inp)
+        keys = bmv(self.W_K, inputs)
+        values = bmv(self.W_V, inputs)
+
+        # Compute output vectors
+        output = attention(query, keys, values)
+        
+        # Residual connection (see RNN for explanation)
+        output = output + inp
+        
+        return (output, inputs)
+    

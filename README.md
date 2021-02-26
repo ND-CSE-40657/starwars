@@ -1,3 +1,3 @@
-# Natural Language Processing HW5
+# Natural Language Processing HW2
 
-Please see https://www3.nd.edu/~dchiang/teaching/nlp/hw5.html for instructions.
+Please see https://www3.nd.edu/~dchiang/teaching/nlp/2021/hw2.html for instructions.

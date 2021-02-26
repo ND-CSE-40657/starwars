@@ -1,7 +1,7 @@
 import torch
 device = 'cpu'
 
-import math, collections.abc, time, random, copy
+import math, collections.abc, random, copy
 
 from layers import *
 
@@ -43,7 +43,7 @@ class Vocab(collections.abc.MutableSet):
         """Convert a number into a word."""
         return self.num_to_word[num]
 
-def read_data(filename):
+def read_parallel(filename):
     """Read data from the file named by 'filename.'
 
     The file should be in the format:
@@ -59,15 +59,23 @@ def read_data(filename):
         ewords = eline.split() + ['<EOS>']
         data.append((fwords, ewords))
     return data
+
+def read_mono(filename):
+    """Read sentences from the file named by 'filename.' """
+    data = []
+    for line in open(filename):
+        words = line.split() + ['<EOS>']
+        data.append(words)
+    return data
     
 class Encoder(torch.nn.Module):
     """IBM Model 2 encoder."""
     
     def __init__(self, vocab_size, dims):
         super().__init__()
-        self.emb = Embedding(vocab_size, dims) # This called V in the notes
+        self.emb = Embedding(vocab_size, dims) # This is called V in the notes
 
-    def sequence(self, fnums):
+    def forward(self, fnums):
         return self.emb(fnums)
     
 class Decoder(torch.nn.Module):
@@ -160,14 +168,14 @@ class Model(torch.nn.Module):
         Return:
             log-probability of ewords given fwords (scalar)"""
         
-        fnums = torch.tensor([fvocab.numberize(f) for f in fwords], device=self.dummy.device)
-        fencs = self.enc.sequence(fnums)
+        fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords], device=self.dummy.device)
+        fencs = self.enc(fnums)
         h = self.dec.start()
         logprob = 0.
-        enum = evocab.numberize('<BOS>')
+        enum = self.evocab.numberize('<BOS>')
         for i in range(len(ewords)):
             o, h = self.dec.step(fencs, h, enum)
-            enum = evocab.numberize(ewords[i])
+            enum = self.evocab.numberize(ewords[i])
             logprob += o[enum]
         return logprob
 
@@ -181,77 +189,110 @@ class Model(torch.nn.Module):
             ewords: target sentence (list of str)
         """
         
-        fnums = torch.tensor([fvocab.numberize(f) for f in fwords], device=self.dummy.device)
-        fencs = self.enc.sequence(fnums)
+        fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords], device=self.dummy.device)
+        fencs = self.enc(fnums)
         h = self.dec.start()
         ewords = []
-        enum = evocab.numberize('<BOS>')
+        enum = self.evocab.numberize('<BOS>')
         for i in range(100):
             o, h = self.dec.step(fencs, h, enum)
             enum = torch.argmax(o).item()
-            if evocab.denumberize(enum) == '<EOS>': break
-            ewords.append(enum)
-        return [evocab.denumberize(enum) for enum in ewords]
+            eword = self.evocab.denumberize(enum)
+            if eword == '<EOS>': break
+            ewords.append(eword)
+        return ewords
 
 if __name__ == "__main__":
-
-    ### Read data and create vocabularies
+    import argparse, sys
     
-    traindata = read_data('data/train.zh-en')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train', type=str, help='training data')
+    parser.add_argument('--dev', type=str, help='development data')
+    parser.add_argument('infile', nargs='?', type=str, help='test data to translate')
+    parser.add_argument('-o', '--outfile', type=str, help='write translations to file')
+    parser.add_argument('--load', type=str, help='load model from file')
+    parser.add_argument('--save', type=str, help='save model in file')
+    args = parser.parse_args()
 
-    fvocab = Vocab()
-    evocab = Vocab()
-    for fwords, ewords in traindata:
-        fvocab |= fwords
-        evocab |= ewords
+    if args.train:
+        # Read training data and create vocabularies
+        traindata = read_parallel(args.train)
 
-    devdata = read_data('data/dev.zh-en')
-    testdata = read_data('data/test.zh-en')
+        fvocab = Vocab()
+        evocab = Vocab()
+        for fwords, ewords in traindata:
+            fvocab |= fwords
+            evocab |= ewords
 
-    ### Create model and optimizer
-
-    m = Model(fvocab, 64, evocab) # try increasing 64 to 128 or 256
-    opt = torch.optim.Adam(m.parameters(), lr=0.0003)
-
-    best_dev_loss = None
-    for epoch in range(10):
-        epoch_time = time.time()
-        random.shuffle(traindata)
-
-        ### Update model on train
+        # Create model
+        m = Model(fvocab, 64, evocab) # try increasing 64 to 128 or 256
         
-        train_loss = 0.
-        train_ewords = 0
-        for fwords, ewords in tqdm(traindata):
-            loss = -m.logprob(fwords, ewords)
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            train_loss += loss.item()
-            train_ewords += len(ewords)
+        if args.dev is None:
+            print('error: --dev is required', file=sys.stderr)
+            sys.exit()
+        devdata = read_parallel('data/dev.zh-en')
+            
+    elif args.load:
+        if args.save:
+            print('error: --save can only be used with --train', file=sys.stderr)
+            sys.exit()
+        if args.dev:
+            print('error: --dev can only be used with --train', file=sys.stderr)
+            sys.exit()
+        m = torch.load(args.load)
 
-        ### Validate on dev set and print out a few translations
+    else:
+        print('error: either --train or --load is required', file=sys.stderr)
+        sys.exit()
 
-        dev_loss = 0.
-        dev_ewords = 0
-        for line_num, (fwords, ewords) in enumerate(devdata):
-            dev_loss -= m.logprob(fwords, ewords).item()
-            dev_ewords += len(ewords)
-            if line_num < 10:
-                translation = m.translate(fwords)
-                print(' '.join(translation))
+    if args.infile and not args.outfile:
+        print('error: -o is required', file=sys.stderr)
+        sys.exit()
 
-        if best_dev_loss is None or dev_loss < best_dev_loss:
-            best_model = copy.deepcopy(m)
-            best_dev_loss = dev_loss
+    if args.train:
+        opt = torch.optim.Adam(m.parameters(), lr=0.0003)
 
-        print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)} time={time.time()-epoch_time}', flush=True)
+        best_dev_loss = None
+        for epoch in range(10):
+            random.shuffle(traindata)
+
+            ### Update model on train
+
+            train_loss = 0.
+            train_ewords = 0
+            for fwords, ewords in tqdm(traindata):
+                loss = -m.logprob(fwords, ewords)
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                train_loss += loss.item()
+                train_ewords += len(ewords)
+
+            ### Validate on dev set and print out a few translations
+            
+            dev_loss = 0.
+            dev_ewords = 0
+            for line_num, (fwords, ewords) in enumerate(devdata):
+                dev_loss -= m.logprob(fwords, ewords).item()
+                dev_ewords += len(ewords)
+                if line_num < 10:
+                    translation = m.translate(fwords)
+                    print(' '.join(translation))
+
+            if best_dev_loss is None or dev_loss < best_dev_loss:
+                best_model = copy.deepcopy(m)
+                if args.save:
+                    torch.save(m, args.save)
+                best_dev_loss = dev_loss
+
+            print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)}', flush=True)
+            
+        m = best_model
 
     ### Translate test set
 
-    m = best_model    
-
-    with open('test.out', 'w') as outfile:    
-        for fwords, _ in testdata:
-            translation = m.translate(fwords)
-            print(' '.join(translation), file=outfile)
+    if args.infile:
+        with open(args.outfile, 'w') as outfile:
+            for fwords in read_mono(args.infile):
+                translation = m.translate(fwords)
+                print(' '.join(translation), file=outfile)
