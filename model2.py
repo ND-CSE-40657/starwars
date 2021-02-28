@@ -55,8 +55,8 @@ def read_parallel(filename):
     data = []
     for line in open(filename):
         fline, eline = line.split('\t')
-        fwords = fline.split() + ['<EOS>']
-        ewords = eline.split() + ['<EOS>']
+        fwords = ['<BOS>'] + fline.split() + ['<EOS>']
+        ewords = ['<BOS>'] + eline.split() + ['<EOS>']
         data.append((fwords, ewords))
     return data
 
@@ -64,7 +64,7 @@ def read_mono(filename):
     """Read sentences from the file named by 'filename.' """
     data = []
     for line in open(filename):
-        words = line.split() + ['<EOS>']
+        words = ['<BOS>'] + line.split() + ['<EOS>']
         data.append(words)
     return data
     
@@ -172,8 +172,9 @@ class Model(torch.nn.Module):
         fencs = self.enc(fnums)
         h = self.dec.start()
         logprob = 0.
-        enum = self.evocab.numberize('<BOS>')
-        for i in range(len(ewords)):
+        assert ewords[0] == '<BOS>'
+        enum = self.evocab.numberize(ewords[0])
+        for i in range(1, len(ewords)):
             o, h = self.dec.step(fencs, h, enum)
             enum = self.evocab.numberize(ewords[i])
             logprob += o[enum]
@@ -266,7 +267,7 @@ if __name__ == "__main__":
                 loss.backward()
                 opt.step()
                 train_loss += loss.item()
-                train_ewords += len(ewords)
+                train_ewords += len(ewords)-1 # -1 for BOS
 
             ### Validate on dev set and print out a few translations
             
@@ -274,7 +275,7 @@ if __name__ == "__main__":
             dev_ewords = 0
             for line_num, (fwords, ewords) in enumerate(devdata):
                 dev_loss -= m.logprob(fwords, ewords).item()
-                dev_ewords += len(ewords)
+                dev_ewords += len(ewords)-1 # -1 for BOS
                 if line_num < 10:
                     translation = m.translate(fwords)
                     print(' '.join(translation))
