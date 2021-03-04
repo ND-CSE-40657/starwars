@@ -227,7 +227,7 @@ class SoftmaxLayer(torch.nn.Module):
         # Scaling both the output embeddings and the inputs
         # to have norm 1 and 10, respectively, helps against overfitting.
         # https://www.aclweb.org/anthology/N18-1031/
-        W = torch.nn.functional.normalize(self.W, dim=0)
+        W = torch.nn.functional.normalize(self.W, dim=1)
         inp = torch.nn.functional.normalize(inp, dim=-1) * 10
 
         return torch.log_softmax(bmv(W, inp), dim=-1)
