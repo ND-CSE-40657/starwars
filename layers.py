@@ -188,6 +188,38 @@ class TanhLayer(torch.nn.Module):
         
         return torch.tanh(bmv(self.W, inp) + self.b)
 
+class ResidualTanhLayer(torch.nn.Module):
+    """Tanh layer with residual connection.
+
+    The constructor takes these arguments:
+        dims:  Size of input and output vectors (int)
+
+    The resulting ResidualTanhLayer object is callable. See forward().
+    """
+    def __init__(self, dims):
+        super().__init__()
+        self.layer = TanhLayer(dims, dims)
+
+    def forward(self, inp):
+        """Works on either single vectors or sequences of vectors.
+
+        Argument:
+            inp: Input vector (tensor of size dims)
+
+        Return:
+            Output vector (tensor of size dims)
+
+        *or*
+
+        Argument:
+            inp: Input vectors (tensor of size n,dims)
+
+        Return:
+            Output vectors (tensor of size n,dims)
+        """
+        
+        return self.layer(inp) + inp
+
 class SoftmaxLayer(torch.nn.Module):
     """Softmax layer.
 
@@ -262,7 +294,6 @@ def attention(query, keys, vals):
         raise TypeError("There must be the same number of keys and values (second-to-last axis)")
 
     logits = query @ keys.transpose(-2, -1)  # m,n
-    logits /= keys.size()[-1] ** 0.5
     aweights = torch.softmax(logits, dim=-1) # m,n
     context = aweights @ vals                # m,d'
     return context
