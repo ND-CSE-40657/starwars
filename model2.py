@@ -5,17 +5,21 @@ import math, collections.abc, random, copy
 
 from layers import *
 
-# If installed, this prints progress bars
-try:
-    from tqdm import tqdm
-except ImportError:
-    def tqdm(iterable):
+def progress(iterable):
+    import os, sys
+    if os.isatty(sys.stderr.fileno()):
+        try:
+            import tqdm
+            return tqdm.tqdm(iterable)
+        except ImportError:
+            return iterable
+    else:
         return iterable
 
 class Vocab(collections.abc.MutableSet):
     """Set-like data structure that can change words into numbers and back."""
     def __init__(self):
-        words = {'<BOS>', '<EOS>', '<UNK>'}
+        words = {'<EOS>', '<UNK>'}
         self.num_to_word = list(words)    
         self.word_to_num = {word:num for num, word in enumerate(self.num_to_word)}
     def add(self, word):
@@ -23,7 +27,7 @@ class Vocab(collections.abc.MutableSet):
         num = len(self.num_to_word)
         self.num_to_word.append(word)
         self.word_to_num[word] = num
-    def discard(elf, word):
+    def discard(self, word):
         raise NotImplementedError()
     def __contains__(self, word):
         return word in self.word_to_num
@@ -51,20 +55,27 @@ def read_parallel(filename):
     我 不 喜 欢 沙 子 \t i do n't like sand
 
     where \t is a tab character.
+
+    Argument: filename
+    Returns: list of pairs of lists of strings. <EOS> is appended to all sentences.
     """
     data = []
     for line in open(filename):
         fline, eline = line.split('\t')
-        fwords = ['<BOS>'] + fline.split() + ['<EOS>']
-        ewords = ['<BOS>'] + eline.split() + ['<EOS>']
+        fwords = fline.split() + ['<EOS>']
+        ewords = eline.split() + ['<EOS>']
         data.append((fwords, ewords))
     return data
 
 def read_mono(filename):
-    """Read sentences from the file named by 'filename.' """
+    """Read sentences from the file named by 'filename.' 
+
+    Argument: filename
+    Returns: list of lists of strings. <EOS> is appended to each sentence.
+    """
     data = []
     for line in open(filename):
-        words = ['<BOS>'] + line.split() + ['<EOS>']
+        words = line.split() + ['<EOS>']
         data.append(words)
     return data
     
@@ -76,8 +87,13 @@ class Encoder(torch.nn.Module):
         self.emb = Embedding(vocab_size, dims) # This is called V in the notes
 
     def forward(self, fnums):
+        """Encode a Chinese sentence.
+
+        Argument: Chinese sentence (list of n strings)
+        Returns: Chinese word encodings (Tensor of size n,d)"""
+        
         return self.emb(fnums)
-    
+
 class Decoder(torch.nn.Module):
     """IBM Model 2 decoder."""
     
@@ -90,52 +106,61 @@ class Decoder(torch.nn.Module):
         # We can think of fpos[j] as a vector representation of the number j,
         # and similarly epos[i] as a vector representation of the number i.
         
-        self.maxlen = 100
-        self.fpos = torch.nn.Parameter(torch.empty(self.maxlen, dims))
-        self.epos = torch.nn.Parameter(torch.empty(self.maxlen, dims))
+        self.fpos = torch.nn.Parameter(torch.empty(100, dims))
+        self.epos = torch.nn.Parameter(torch.empty(100, dims))
         torch.nn.init.normal_(self.fpos, std=0.01)
         torch.nn.init.normal_(self.epos, std=0.01)
         
         self.out = SoftmaxLayer(dims, vocab_size) # This is called U in the notes
 
-    def start(self):
+    def start(self, fencs):
         """Return the initial state of the decoder.
 
-        For Model 2, the state is just the English position.
+        Argument:
+        - fencs (Tensor of size n,d): Source encodings
 
-        If you add an RNN to the decoder, you should call
-        the RNN's start() method here."""
+        For Model 2, the state is just the English position, but in
+        general it could be anything. If you add an RNN to the
+        decoder, you should call the RNN's start() method here.
+        """
         
-        return 0
+        return (fencs, 0)
 
-    def step(self, fencs, state, enum):
-        """Run one step of the decoder:
-
-        1. Read in an English word (enum) and compute a new state from the old state (state).
-        2. Compute a probability distribution over the next English word.
+    def input(self, state, enum):
+        """Read in an English word (enum) and compute a new state from
+        the old state (state).
 
         Arguments:
-            fencs: Chinese word encodings (tensor of size n,d)
             state: Old state of decoder
             enum:  Next English word (int)
 
-        Returns (logprobs, newstate), where
-            logprobs: Vector of log-probabilities (tensor of size len(evocab))
-            newstate: New state of decoder
+        Returns: New state of decoder
         """
         
+        (fencs, i) = state
+        return (fencs, i+1)
+
+    def output(self, state):
+        """Compute a probability distribution over the next English word.
+
+        Argument: State of decoder
+
+        Returns: Vector of log-probabilities (tensor of size len(evocab))
+        """
+
+        (fencs, i) = state
         flen = len(fencs)
 
         # Compute t(e | f_j) for all j
-        v = self.out(fencs)    # n,len(evocab)
+        v = self.out(fencs)      # n,len(evocab)
 
         # Compute queries and keys based purely on positions
-        q = self.epos[state]   # d
-        k = self.fpos[:flen]   # n,d
+        q = self.epos[i]         # d
+        k = self.fpos[:flen]     # n,d
+
+        o = attention(q, k, v)   # len(evocab)
         
-        o = attention(q, k, v) # len(evocab)
-        
-        return (o, state+1)
+        return o
 
 class Model(torch.nn.Module):
     """IBM Model 2.
@@ -151,11 +176,10 @@ class Model(torch.nn.Module):
         self.fvocab = fvocab
         self.evocab = evocab
         
-        self.enc = Encoder(len(fvocab), dims)
-        self.dec = Decoder(dims, len(evocab))
+        self.encoder = Encoder(len(fvocab), dims)
+        self.decoder = Decoder(dims, len(evocab))
 
-        # This is just so we know what device to create new tensors on
-        
+        # This is just so we know what device to create new tensors on        
         self.dummy = torch.nn.Parameter(torch.empty(0))
 
     def logprob(self, fwords, ewords):
@@ -167,17 +191,16 @@ class Model(torch.nn.Module):
 
         Return:
             log-probability of ewords given fwords (scalar)"""
-        
+
         fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords], device=self.dummy.device)
-        fencs = self.enc(fnums)
-        h = self.dec.start()
+        fencs = self.encoder(fnums)
+        state = self.decoder.start(fencs)
         logprob = 0.
-        assert ewords[0] == '<BOS>'
-        enum = self.evocab.numberize(ewords[0])
-        for i in range(1, len(ewords)):
-            o, h = self.dec.step(fencs, h, enum)
-            enum = self.evocab.numberize(ewords[i])
+        for eword in ewords:
+            o = self.decoder.output(state)
+            enum = self.evocab.numberize(eword)
             logprob += o[enum]
+            state = self.decoder.input(state, enum)
         return logprob
 
     def translate(self, fwords):
@@ -191,16 +214,16 @@ class Model(torch.nn.Module):
         """
         
         fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords], device=self.dummy.device)
-        fencs = self.enc(fnums)
-        h = self.dec.start()
+        fencs = self.encoder(fnums)
+        state = self.decoder.start(fencs)
         ewords = []
-        enum = self.evocab.numberize('<BOS>')
         for i in range(100):
-            o, h = self.dec.step(fencs, h, enum)
+            o = self.decoder.output(state)
             enum = torch.argmax(o).item()
             eword = self.evocab.denumberize(enum)
             if eword == '<EOS>': break
             ewords.append(eword)
+            state = self.decoder.input(state, enum)
         return ewords
 
 if __name__ == "__main__":
@@ -231,7 +254,7 @@ if __name__ == "__main__":
         if args.dev is None:
             print('error: --dev is required', file=sys.stderr)
             sys.exit()
-        devdata = read_parallel('data/dev.zh-en')
+        devdata = read_parallel(args.dev)
             
     elif args.load:
         if args.save:
@@ -261,13 +284,13 @@ if __name__ == "__main__":
 
             train_loss = 0.
             train_ewords = 0
-            for fwords, ewords in tqdm(traindata):
+            for fwords, ewords in progress(traindata):
                 loss = -m.logprob(fwords, ewords)
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
                 train_loss += loss.item()
-                train_ewords += len(ewords)-1 # -1 for BOS
+                train_ewords += len(ewords) # includes EOS
 
             ### Validate on dev set and print out a few translations
             
@@ -275,7 +298,7 @@ if __name__ == "__main__":
             dev_ewords = 0
             for line_num, (fwords, ewords) in enumerate(devdata):
                 dev_loss -= m.logprob(fwords, ewords).item()
-                dev_ewords += len(ewords)-1 # -1 for BOS
+                dev_ewords += len(ewords) # includes EOS
                 if line_num < 10:
                     translation = m.translate(fwords)
                     print(' '.join(translation))
