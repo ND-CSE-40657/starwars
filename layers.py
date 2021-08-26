@@ -198,7 +198,7 @@ class TanhLayer(torch.nn.Module):
         
         input_dims = self.W.size()[-1]
         if inp.size()[-1] != input_dims:
-            raise TypeError(f"The inputs must have size {input_dims}")
+            raise TypeError(f"The inputs must have size {input_dims} (not {inp.size()[-1]})")
         
         out = torch.tanh(bmv(self.W, inp) + self.b)
         if self.residual:
@@ -344,7 +344,7 @@ class MaskedSelfAttention(torch.nn.Module):
         self.W_Q = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_K = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_V = torch.nn.Parameter(torch.empty(dims, dims))
-        self.initial = torch.nn.Parameter(torch.empty(1, dims))
+        self.initial = torch.nn.Parameter(torch.empty(dims))
         torch.nn.init.normal_(self.W_Q, std=0.01)
         torch.nn.init.normal_(self.W_K, std=0.01)
         torch.nn.init.normal_(self.W_V, std=0.01)
@@ -361,7 +361,8 @@ class MaskedSelfAttention(torch.nn.Module):
         # something. Most implementations avoid this problem by
         # prepending <BOS>; here, the parameter self.initial is
         # basically the encoding of <BOS>.
-        return self.initial
+        dims = self.initial.size()[0]
+        return torch.empty(0, dims)
 
     def input(self, prev_inps, inp):
         """Read in an input vector and append it to the list of previous inputs."""
