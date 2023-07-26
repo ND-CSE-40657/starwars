@@ -31,4 +31,4 @@ Preprocessing:
 
 The large training data is from the OpenSubtitles portion of OPUS
 (which is also derived from opensubtitles.org). We selected all films
-released in 2004 or earlier.
+released between 2000 and 2004.
