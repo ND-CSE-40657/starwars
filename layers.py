@@ -156,15 +156,15 @@ class RNN(torch.nn.Module):
             outputs.append(o)
         return torch.stack(outputs)
     
-class TanhLayer(torch.nn.Module):
-    """Tanh layer.
+class LinearLayer(torch.nn.Module):
+    """Linear layer.
 
     The constructor takes these arguments:
         input_dims:  Size of input vectors (int)
         output_dims: Size of output vectors (int)
         residual:    Add a residual connection (bool)
 
-    The resulting TanhLayer object is callable. See forward().
+    The resulting LinearLayer object is callable. See forward().
 
     If residual is True, then input_dims and output_dims must be equal.
     """
@@ -200,11 +200,50 @@ class TanhLayer(torch.nn.Module):
         if inp.size()[-1] != input_dims:
             raise TypeError(f"The inputs must have size {input_dims} (not {inp.size()[-1]})")
         
-        out = torch.tanh(bmv(self.W, inp) + self.b)
+        out = bmv(self.W, inp) + self.b
         if self.residual:
             out = out + inp
         return out
 
+class TanhLayer(torch.nn.Module):
+    """Tanh layer.
+
+    The constructor takes these arguments:
+        input_dims:  Size of input vectors (int)
+        output_dims: Size of output vectors (int)
+        residual:    Add a residual connection (bool)
+
+    The resulting TanhLayer object is callable. See forward().
+
+    If residual is True, then input_dims and output_dims must be equal.
+    """
+    def __init__(self, input_dims, output_dims, residual=False):
+        super().__init__()
+        self.residual = residual
+        self.linear = LinearLayer(input_dims, output_dims)
+
+    def forward(self, inp):
+        """Works on either single vectors or sequences of vectors.
+
+        Argument:
+            inp: Input vector (tensor of size input_dims)
+
+        Return:
+            Output vector (tensor of size output_dims)
+
+        *or*
+
+        Argument:
+            inp: Input vectors (tensor of size n,input_dims)
+
+        Return:
+            Output vectors (tensor of size n,output_dims)
+        """
+        out = torch.tanh(self.linear(inp))
+        if self.residual:
+            out = out + inp
+        return out
+        
 class SoftmaxLayer(torch.nn.Module):
     """Softmax layer.
 
