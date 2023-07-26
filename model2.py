@@ -1,5 +1,5 @@
 import torch
-device = 'cpu'
+torch.set_default_device('cpu')
 
 import math, collections.abc, random, copy
 
@@ -179,9 +179,6 @@ class Model(torch.nn.Module):
         self.encoder = Encoder(len(fvocab), dims)
         self.decoder = Decoder(dims, len(evocab))
 
-        # This is just so we know what device to create new tensors on        
-        self.dummy = torch.nn.Parameter(torch.empty(0))
-
     def logprob(self, fwords, ewords):
         """Return the log-probability of a sentence pair.
 
@@ -192,7 +189,7 @@ class Model(torch.nn.Module):
         Return:
             log-probability of ewords given fwords (scalar)"""
 
-        fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords], device=self.dummy.device)
+        fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords])
         fencs = self.encoder(fnums)
         state = self.decoder.start(fencs)
         logprob = 0.
@@ -213,7 +210,7 @@ class Model(torch.nn.Module):
             ewords: target sentence (list of str)
         """
         
-        fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords], device=self.dummy.device)
+        fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords])
         fencs = self.encoder(fnums)
         state = self.decoder.start(fencs)
         ewords = []
