@@ -400,8 +400,8 @@ class MaskedSelfAttention(torch.nn.Module):
         # something. Most implementations avoid this problem by
         # prepending <BOS>; here, the parameter self.initial is
         # basically the encoding of <BOS>.
-        dims = self.initial.size()[0]
-        return torch.empty(0, dims)
+
+        return self.initial.unsqueeze(0)
 
     def input(self, prev_inps, inp):
         """Read in an input vector and append it to the list of previous inputs."""
