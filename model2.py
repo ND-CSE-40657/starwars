@@ -89,7 +89,7 @@ class Encoder(torch.nn.Module):
     def forward(self, fnums):
         """Encode a Chinese sentence.
 
-        Argument: Chinese sentence (list of n strings)
+        Argument: Chinese sentence (list of n ints)
         Returns: Chinese word encodings (Tensor of size n,d)"""
         
         return self.emb(fnums)
@@ -145,7 +145,7 @@ class Decoder(torch.nn.Module):
 
         Argument: State of decoder
 
-        Returns: Vector of log-probabilities (tensor of size len(evocab))
+        Returns: Vector of log-probabilities (Tensor of size len(evocab))
         """
 
         (fencs, i) = state
@@ -160,6 +160,23 @@ class Decoder(torch.nn.Module):
 
         o = attention(q, k, v)   # len(evocab)
         
+        return o
+
+    def sequence(self, fencs, enums):
+        """Compute probability distributions for an English sentence.
+
+        Arguments:
+            fencs: Chinese word encodings (Tensor of size n,d)
+            enums: English words, including <EOS> (list of m ints)
+
+        Returns: Matrix of log-probabilities (Tensor of size m,d)
+        """
+        flen = len(fencs)
+        elen = len(enums)
+        v = self.out(fencs)      # flen,len(evocab)
+        q = self.epos[:elen]     # elen,d
+        k = self.fpos[:flen]     # flen,d
+        o = attention(q, k, v)   # elen,len(evocab)
         return o
 
 class Model(torch.nn.Module):
@@ -191,14 +208,11 @@ class Model(torch.nn.Module):
 
         fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords])
         fencs = self.encoder(fnums)
-        state = self.decoder.start(fencs)
-        logprob = 0.
-        for eword in ewords:
-            o = self.decoder.output(state)
-            enum = self.evocab.numberize(eword)
-            logprob += o[enum]
-            state = self.decoder.input(state, enum)
-        return logprob
+        enums = torch.tensor([self.evocab.numberize(e) for e in ewords])
+        
+        h = self.decoder.sequence(fencs, enums)
+        logprobs = h[torch.arange(len(enums)), enums] # logprobs[i] = h[i,enums[i]]
+        return logprobs.sum()
 
     def translate(self, fwords):
         """Translate a sentence using greedy search.
