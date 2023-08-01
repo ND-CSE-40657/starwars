@@ -72,7 +72,7 @@ class RNN(torch.nn.Module):
         dims: Size of both the input and output vectors (int)
 
     The resulting RNN object can be used in two ways:
-      - Step by step, using start(), input(), and output()
+      - Step by step, using start() and step()
       - On a whole sequence at once, using sequence()
     Please see the documentation for those methods.
 
@@ -81,9 +81,10 @@ class RNN(torch.nn.Module):
     vector. This helps against overfitting, but makes the
     implementation slightly more complicated.
     """
-    
+
     def __init__(self, dims):
         super().__init__()
+        self.dims = dims
         self.h0 = torch.nn.Parameter(torch.empty(dims))
         self.W_hi = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_hh = torch.nn.Parameter(torch.empty(dims, dims))
@@ -94,68 +95,51 @@ class RNN(torch.nn.Module):
         torch.nn.init.normal_(self.b, std=0.01)
 
     def start(self):
-        """Return the initial state, which is a pair consisting of the
-        most recent input (here 0 because there's no previous input) and h."""
-        return (0, self.h0)
+        """Return the initial state."""
+        return self.h0
 
-    def input(self, state, inp):
-        """Given the old state (state), read in an input vector (inp) and
-        compute the new state.
-
-        Arguments:
-            state:  Pair consisting of h and input (tensor of size dims)
-            inp:    Input vector (tensor of size dims)
-
-        Returns:    Pair consisting of new h and inp
-
-        """
-
-        _, h_prev = state
-        
-        dims = self.b.size()[0]
-        if h_prev.size()[-1] != dims:
-            raise TypeError(f'Previous hidden-state vector must have size {dims}')
-        if inp.size()[-1] != dims:
-            raise TypeError(f'Input vector must have size {dims}')
-        
-        h_cur = torch.tanh(bmv(self.W_hi, inp) + bmv(self.W_hh, h_prev) + self.b)
-        return (inp, h_cur)
-
-    def output(self, state):
-        """Compute an output vector based on the state.
+    def step(self, state, inp):
+        """Given the old state, read in an input vector (inp) and
+        compute the new state and output vector (out).
 
         Arguments:
-            state:  Pair consisting of h and input (tensor of size dims)
-        Returns a pair (out, h_cur), where:
-            out:    Output vector (tensor of size dims)
+            state:  State (Tensor of size dims)
+            inp:    Input vector (Tensor of size dims)
+
+        Returns: (state, out), where
+            state:  State (Tensor of size dims)
+            out:    Output vector (Tensor of size dims)
         """
-        
-        inp, h = state
-        return inp + h
+
+        if state.size()[-1] != self.dims:
+            raise TypeError(f'Previous hidden-state vector must have size {self.dims}')
+        if inp.size()[-1] != self.dims:
+            raise TypeError(f'Input vector must have size {self.dims}')
+
+        state = torch.tanh(bmv(self.W_hi, inp) + bmv(self.W_hh, state) + self.b)
+        return (state, state + inp)
 
     def sequence(self, inputs):
         """Run the RNN on an input sequence.
-
         Argument:
-            Input vectors (tensor of size n,dims)
+            Input vectors (Tensor of size n,dims)
 
         Return:
-            Output vectors (tensor of size n,dims)
+            Output vectors (Tensor of size n,dims)
         """
-        dims = self.b.size()[0]
+
         if inputs.ndim != 2:
             raise TypeError("inputs must have exactly two axes")
-        if inputs.size()[1] != dims:
-            raise TypeError(f'Input vectors must have size {dims}')
+        if inputs.size()[1] != self.dims:
+            raise TypeError(f'Input vectors must have size {self.dims}')
 
         h = self.start()
         outputs = []
         for inp in inputs:
-            h = self.input(h, inp)
-            o = self.output(h)
+            h, o = self.step(h, inp)
             outputs.append(o)
         return torch.stack(outputs)
-    
+
 class LinearLayer(torch.nn.Module):
     """Linear layer.
 
@@ -244,6 +228,45 @@ class TanhLayer(torch.nn.Module):
             out = out + inp
         return out
         
+class ReLULayer(torch.nn.Module):
+    """ReLU layer.
+
+    The constructor takes these arguments:
+        input_dims:  Size of input vectors (int)
+        output_dims: Size of output vectors (int)
+        residual:    Add a residual connection (bool)
+
+    The resulting ReLULayer object is callable. See forward().
+
+    If residual is True, then input_dims and output_dims must be equal.
+    """
+    def __init__(self, input_dims, output_dims, residual=False):
+        super().__init__()
+        self.residual = residual
+        self.linear = LinearLayer(input_dims, output_dims)
+
+    def forward(self, inp):
+        """Works on either single vectors or sequences of vectors.
+
+        Argument:
+            inp: Input vector (tensor of size input_dims)
+
+        Return:
+            Output vector (tensor of size output_dims)
+
+        *or*
+
+        Argument:
+            inp: Input vectors (tensor of size n,input_dims)
+
+        Return:
+            Output vectors (tensor of size n,output_dims)
+        """
+        out = torch.relu(self.linear(inp))
+        if self.residual:
+            out = out + inp
+        return out
+        
 class SoftmaxLayer(torch.nn.Module):
     """Softmax layer.
 
@@ -288,7 +311,10 @@ class SoftmaxLayer(torch.nn.Module):
 
         return torch.log_softmax(bmv(W, inp), dim=-1)
 
-def attention(query, keys, vals):
+    
+    
+
+def attention(query, keys, vals, mask=False):
     """Compute dot-product attention.
 
     query can be a single vector or a sequence of vectors.
@@ -318,6 +344,11 @@ def attention(query, keys, vals):
         raise TypeError("There must be the same number of keys and values (second-to-last axis)")
 
     logits = query @ keys.transpose(-2, -1)  # m,n
+    if mask:
+        if len(query.size()) != 2:
+            raise TypeError("mask=True can only be used with a query matrix")
+        m, n = query.size()[0], keys.size()[0]
+        logits.masked_fill_(torch.arange(m).unsqueeze(1) < torch.arange(n), -torch.inf)
     aweights = torch.softmax(logits, dim=-1) # m,n
     context = aweights @ vals                # m,d'
     return context
@@ -380,47 +411,60 @@ class MaskedSelfAttention(torch.nn.Module):
     
     def __init__(self, dims):
         super().__init__()
+        self.dims = dims
         self.W_Q = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_K = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_V = torch.nn.Parameter(torch.empty(dims, dims))
-        self.initial = torch.nn.Parameter(torch.empty(dims))
         torch.nn.init.normal_(self.W_Q, std=0.01)
         torch.nn.init.normal_(self.W_K, std=0.01)
         torch.nn.init.normal_(self.W_V, std=0.01)
-        torch.nn.init.normal_(self.initial, std=0.01)
 
     def start(self):
-        """Return the initial list of previous inputs.
+        """For MaskedSelfAttention, the "state" is the list of previous
+        inputs, which is initially empty."""
 
-        For MaskedSelfAttention, the "state" is the list of previous
-        inputs.
-        """
+        return torch.empty(0, self.dims)
 
-        # Initially there are no previous inputs, but we have to have
-        # something. Most implementations avoid this problem by
-        # prepending <BOS>; here, the parameter self.initial is
-        # basically the encoding of <BOS>.
-
-        return self.initial.unsqueeze(0)
-
-    def input(self, prev_inps, inp):
-        """Read in an input vector and append it to the list of previous inputs."""
+    def step(self, prev_inps, inp):
+        """Input a new vector and compute masked self-attention over all input vectors."""
         inputs = torch.cat([prev_inps, inp.unsqueeze(0)], dim=0)
 
-        return inputs
-        
-    def output(self, inputs):
-        """Compute an output vector based on the new list of inputs."""
-
         # Linearly transform inputs in three ways to get queries, keys, values
-        query = bmv(self.W_Q, inputs[-1])
+        query = bmv(self.W_Q, inp)
         keys = bmv(self.W_K, inputs)
         values = bmv(self.W_V, inputs)
 
         # Compute output vectors
         output = attention(query, keys, values)
         
-        # Residual connection (see RNN for explanation)
-        output = output + inputs[-1]
+        # Residual connection
+        output = output + inp
+        
+        return (inputs, output)
+    
+    def sequence(self, inputs):
+        """Argument:
+            inputs: Input vectors, including <BOS> but not <EOS> (Tensor of size n,d)
 
-        return output
+        Return:
+            Output vectors (Tensor of size n,d)
+        """
+
+        dims = self.W_Q.size()[0]
+        if inputs.ndim < 2:
+            raise TypeError("inputs must have at least two axes")
+        if inputs.size()[-1] != dims:
+            raise TypeError(f"input vectors must have size {dims}")
+
+        # Linearly transform inputs in three ways to get queries, keys, values
+        queries = bmv(self.W_Q, inputs)
+        keys = bmv(self.W_K, inputs)
+        values = bmv(self.W_V, inputs)
+
+        # Compute output vectors
+        outputs = attention(queries, keys, values, mask=True)
+        
+        # Residual connection
+        outputs = outputs + inputs
+        
+        return outputs

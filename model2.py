@@ -19,7 +19,7 @@ def progress(iterable):
 class Vocab(collections.abc.MutableSet):
     """Set-like data structure that can change words into numbers and back."""
     def __init__(self):
-        words = {'<EOS>', '<UNK>'}
+        words = {'<BOS>', '<EOS>', '<UNK>'}
         self.num_to_word = list(words)    
         self.word_to_num = {word:num for num, word in enumerate(self.num_to_word)}
     def add(self, word):
@@ -57,13 +57,13 @@ def read_parallel(filename):
     where \t is a tab character.
 
     Argument: filename
-    Returns: list of pairs of lists of strings. <EOS> is appended to all sentences.
+    Returns: list of pairs of lists of strings. <BOS> and <EOS> are added to all sentences.
     """
     data = []
     for line in open(filename):
         fline, eline = line.split('\t')
-        fwords = fline.split() + ['<EOS>']
-        ewords = eline.split() + ['<EOS>']
+        fwords = ['<BOS>'] + fline.split() + ['<EOS>']
+        ewords = ['<BOS>'] + eline.split() + ['<EOS>']
         data.append((fwords, ewords))
     return data
 
@@ -71,11 +71,11 @@ def read_mono(filename):
     """Read sentences from the file named by 'filename.' 
 
     Argument: filename
-    Returns: list of lists of strings. <EOS> is appended to each sentence.
+    Returns: list of lists of strings. <BOS> and <EOS> are added to each sentence.
     """
     data = []
     for line in open(filename):
-        words = line.split() + ['<EOS>']
+        words = ['<BOS>'] + line.split() + ['<EOS>']
         data.append(words)
     return data
     
@@ -123,57 +123,50 @@ class Decoder(torch.nn.Module):
         
         return (fencs, 0)
 
-    def input(self, state, enum):
-        """Read in an English word (enum) and compute a new state from
-        the old state (state).
+    def step(self, state, enum):
+        """Input an English word (enum) and output the log-probability
+        distribution over the next English word.
 
         Arguments:
             state: Old state of decoder
             enum:  Next English word (int)
 
-        Returns: New state of decoder
+        Returns: (state, out), where
+            state: New state of decoder
+            out:   Vector of log-probabilities (Tensor of size len(evocab))
+
         """
         
         (fencs, i) = state
-        return (fencs, i+1)
-
-    def output(self, state):
-        """Compute a probability distribution over the next English word.
-
-        Argument: State of decoder
-
-        Returns: Vector of log-probabilities (Tensor of size len(evocab))
-        """
-
-        (fencs, i) = state
-        flen = len(fencs)
+        n = len(fencs)
 
         # Compute t(e | f_j) for all j
-        v = self.out(fencs)      # n,len(evocab)
+        v = self.out(fencs)             # n,len(evocab)
 
         # Compute queries and keys based purely on positions
-        q = self.epos(i)                  # d
-        k = self.fpos(torch.arange(flen)) # n,d
+        q = self.epos(i)                # d
+        k = self.fpos(torch.arange(n))  # n,d
 
-        o = attention(q, k, v)   # len(evocab)
+        # Compute expected output
+        o = attention(q, k, v)          # len(evocab)
         
-        return o
+        return ((fencs, i+1), o)
 
     def sequence(self, fencs, enums):
         """Compute probability distributions for an English sentence.
 
         Arguments:
             fencs: Chinese word encodings (Tensor of size n,d)
-            enums: English words, including <EOS> (list of m ints)
+            enums: English words, including <BOS> but not <EOS> (list of m ints)
 
         Returns: Matrix of log-probabilities (Tensor of size m,d)
         """
-        flen = len(fencs)
-        elen = len(enums)
-        v = self.out(fencs)      # flen,len(evocab)
-        q = self.epos(torch.arange(elen)) # elen,d
-        k = self.fpos(torch.arange(flen)) # flen,d
-        o = attention(q, k, v)   # elen,len(evocab)
+        n = len(fencs)
+        m = len(enums)
+        v = self.out(fencs)             # n,len(evocab)
+        q = self.epos(torch.arange(m))  # m,d
+        k = self.fpos(torch.arange(n))  # n,d
+        o = attention(q, k, v)          # m,len(evocab)
         return o
 
 class Model(torch.nn.Module):
@@ -205,10 +198,13 @@ class Model(torch.nn.Module):
 
         fnums = torch.tensor([self.fvocab.numberize(f) for f in fwords])
         fencs = self.encoder(fnums)
-        enums = torch.tensor([self.evocab.numberize(e) for e in ewords])
         
-        h = self.decoder.sequence(fencs, enums)
-        logprobs = h[torch.arange(len(enums)), enums] # logprobs[i] = h[i,enums[i]]
+        enums = torch.tensor([self.evocab.numberize(e) for e in ewords])
+        ein = enums[:-1] # no <EOS>
+        eout = enums[1:] # no <BOS>
+        
+        h = self.decoder.sequence(fencs, ein)
+        logprobs = h[torch.arange(len(eout)), eout] # logprobs[i] = h[i,eout[i]]
         return logprobs.sum()
 
     def translate(self, fwords):
@@ -225,13 +221,13 @@ class Model(torch.nn.Module):
         fencs = self.encoder(fnums)
         state = self.decoder.start(fencs)
         ewords = []
+        enum = self.evocab.numberize('<BOS>')
         for i in range(100):
-            o = self.decoder.output(state)
-            enum = torch.argmax(o).item()
+            (state, elogprobs) = self.decoder.step(state, enum)
+            enum = torch.argmax(elogprobs).item()
             eword = self.evocab.denumberize(enum)
             if eword == '<EOS>': break
             ewords.append(eword)
-            state = self.decoder.input(state, enum)
         return ewords
 
 if __name__ == "__main__":
