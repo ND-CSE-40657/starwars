@@ -25,8 +25,8 @@ sed -ne '400,$p' backstroke.zh-en.tsv | cut -f4 | perl tokenize.pl > test.backst
 
 curl -LO 'https://opus.nlpl.eu/download.php?f=OpenSubtitles/v2018/moses/en-zh_cn.txt.zip'
 unzip -l en-zh_cn.txt.zip
-paste OpenSubtitles.en-zh_cn.{zh_cn,en,ids} | egrep '(zh_cn|en)/200[0-4]/' | cut -f1-2 | perl tokenize.pl > large.zh-en
-cut -f1 large.zh-en > large.zh
-cut -f2 large.zh-en > large.en
+paste OpenSubtitles.en-zh_cn.{zh_cn,en,ids} | egrep '(zh_cn|en)/2004/' | cut -f1-2 | perl tokenize.pl > other.zh-en
+(for I in `seq 1 10`; do cat small.zh; done; cut -f1 large.zh-en) > large.zh
+(for I in `seq 1 10`; do cat small.en; done; cut -f2 large.zh-en) > large.en
 
 mv {small,large}.{zh,en} {dev,test}.{zh,reference.en,backstroke.en} ../data
