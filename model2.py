@@ -106,11 +106,8 @@ class Decoder(torch.nn.Module):
         # We can think of fpos[j] as a vector representation of the number j,
         # and similarly epos[i] as a vector representation of the number i.
         
-        self.fpos = torch.nn.Parameter(torch.empty(100, dims))
-        self.epos = torch.nn.Parameter(torch.empty(100, dims))
-        torch.nn.init.normal_(self.fpos, std=0.01)
-        torch.nn.init.normal_(self.epos, std=0.01)
-        
+        self.fpos = Embedding(100, dims)
+        self.epos = Embedding(100, dims)
         self.out = SoftmaxLayer(dims, vocab_size) # This is called U in the notes
 
     def start(self, fencs):
@@ -155,8 +152,8 @@ class Decoder(torch.nn.Module):
         v = self.out(fencs)      # n,len(evocab)
 
         # Compute queries and keys based purely on positions
-        q = self.epos[i]         # d
-        k = self.fpos[:flen]     # n,d
+        q = self.epos(i)                  # d
+        k = self.fpos(torch.arange(flen)) # n,d
 
         o = attention(q, k, v)   # len(evocab)
         
@@ -174,8 +171,8 @@ class Decoder(torch.nn.Module):
         flen = len(fencs)
         elen = len(enums)
         v = self.out(fencs)      # flen,len(evocab)
-        q = self.epos[:elen]     # elen,d
-        k = self.fpos[:flen]     # flen,d
+        q = self.epos(torch.arange(elen)) # elen,d
+        k = self.fpos(torch.arange(flen)) # flen,d
         o = attention(q, k, v)   # elen,len(evocab)
         return o
 
