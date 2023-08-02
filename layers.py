@@ -3,6 +3,7 @@
 Many of these layers are tailored for low-resource translation (thanks to Toan Nguyen)."""
 
 import torch
+import math
 
 def bmv(w, x):
     """Matrix-vector multiplication that works even if x is a sequence of
@@ -72,9 +73,8 @@ class RNN(torch.nn.Module):
         dims: Size of both the input and output vectors (int)
 
     The resulting RNN object can be used in two ways:
-      - Step by step, using start() and step()
-      - On a whole sequence at once, using sequence()
-    Please see the documentation for those methods.
+      - On a whole sequence at once, by calling the object (see documentation for forward())
+      - Step by step, using start() and step(); please see the documentation for those methods.
 
     This implementation adds a _residual connection_, which just means
     that output vector is the standard output vector plus the input
@@ -119,7 +119,7 @@ class RNN(torch.nn.Module):
         state = torch.tanh(bmv(self.W_hi, inp) + bmv(self.W_hh, state) + self.b)
         return (state, state + inp)
 
-    def sequence(self, inputs):
+    def forward(self, inputs):
         """Run the RNN on an input sequence.
         Argument:
             Input vectors (Tensor of size n,dims)
@@ -311,10 +311,7 @@ class SoftmaxLayer(torch.nn.Module):
 
         return torch.log_softmax(bmv(W, inp), dim=-1)
 
-    
-    
-
-def attention(query, keys, vals, mask=False):
+def attention(query, keys, vals, mask=None):
     """Compute dot-product attention.
 
     query can be a single vector or a sequence of vectors.
@@ -323,6 +320,7 @@ def attention(query, keys, vals, mask=False):
         keys:  Key vectors (tensor with size n,d)
         query: Query vector (tensor with size d)
         vals:  Value vectors (tensor with size n,d')
+        mask:  Mask (tensor with size n and dtype bool)
 
     Returns:
         Context vector (tensor with size d')
@@ -333,38 +331,36 @@ def attention(query, keys, vals, mask=False):
         keys:  Key vectors (tensor with size n,d)
         query: Query vectors (tensor with size m,d)
         vals:  Value vectors (tensor with size n,d')
+        mask:  Mask (tensor with size m,n and dtype bool)
 
     Returns:
         Context vectors (tensor with size m,d')
     """
     
     if query.size()[-1] != keys.size()[-1]:
-        raise TypeError("The queries and keys should be the same size (last axis)")
+        raise TypeError("The queries and keys should be the same size")
+    d = query.size()[-1]
     if keys.size()[-2] != vals.size()[-2]:
-        raise TypeError("There must be the same number of keys and values (second-to-last axis)")
+        raise TypeError("There must be the same number of keys and values")
+    if mask is not None:
+        if len(query.size()) >= 2 and mask.size()[-2] != query.size()[-2]:
+            raise TypeError("Mask has wrong size")
+        if mask.size()[-1] != keys.size()[-2]:
+            raise TypeError("Mask has wrong size")
 
-    logits = query @ keys.transpose(-2, -1)  # m,n
-    if mask:
-        if len(query.size()) != 2:
-            raise TypeError("mask=True can only be used with a query matrix")
-        m, n = query.size()[0], keys.size()[0]
-        logits.masked_fill_(torch.arange(m).unsqueeze(1) < torch.arange(n), -torch.inf)
-    aweights = torch.softmax(logits, dim=-1) # m,n
-    context = aweights @ vals                # m,d'
+    logits = query @ keys.transpose(-2, -1) / math.sqrt(d) # m,n
+    if mask is not None:
+        logits.masked_fill_(mask, -torch.inf)
+    aweights = torch.softmax(logits, dim=-1)               # m,n
+    context = aweights @ vals                              # m,d'
     return context
 
-class SelfAttention(torch.nn.Module):
-    """Self-attention layer, for use in an encoder.
+class AttentionLayer(torch.nn.Module):
+    """Base class for attention layers."""
 
-    The SelfAttention constructor takes one argument:
-        dims: Size of input and output vectors (int)
-
-    The resulting object is callable (see forward()) but can only be
-    used on sequences of vectors, not single vectors.
-    """
-    
     def __init__(self, dims):
         super().__init__()
+        self.dims = dims
         self.W_Q = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_K = torch.nn.Parameter(torch.empty(dims, dims))
         self.W_V = torch.nn.Parameter(torch.empty(dims, dims))
@@ -372,6 +368,16 @@ class SelfAttention(torch.nn.Module):
         torch.nn.init.normal_(self.W_K, std=0.01)
         torch.nn.init.normal_(self.W_V, std=0.01)
 
+class SelfAttentionLayer(AttentionLayer):
+    """Self-attention layer, for use in an encoder.
+
+    The constructor takes one argument:
+        dims: Size of input and output vectors (int)
+
+    The resulting object is callable (see forward()) but can only be
+    used on sequences of vectors, not single vectors.
+    """
+    
     def forward(self, inputs):
         """Argument:
             inputs: Input vectors (tensor of size n,d)
@@ -380,11 +386,10 @@ class SelfAttention(torch.nn.Module):
             Output vectors (tensor of size n,d)
         """
 
-        dims = self.W_Q.size()[0]
         if inputs.ndim < 2:
             raise TypeError("inputs must have at least two axes")
-        if inputs.size()[-1] != dims:
-            raise TypeError(f"input vectors must have size {dims}")
+        if inputs.size()[-1] != self.dims:
+            raise TypeError(f"input vectors must have size {self.dims}")
 
         # Linearly transform inputs in three ways to get queries, keys, values
         queries = bmv(self.W_Q, inputs)
@@ -399,30 +404,20 @@ class SelfAttention(torch.nn.Module):
         
         return outputs
 
-class MaskedSelfAttention(torch.nn.Module):
+class MaskedSelfAttentionLayer(AttentionLayer):
     """Masked self-attention layer, for use in a decoder.
 
-    The MaskedSelfAttention constructor takes one argument:
+    The constructor takes one argument:
         dims: Size of input and output vectors (int)
 
-    The resulting object has start(), input(), and output() methods;
-    please see documentation for those methods.
+    The resulting object is callable (see forward()) but can only be
+    used on sequences of vectors, not single vectors. It also has
+    start() and step() methods; please see documentation for those
+    methods.
     """
     
-    def __init__(self, dims):
-        super().__init__()
-        self.dims = dims
-        self.W_Q = torch.nn.Parameter(torch.empty(dims, dims))
-        self.W_K = torch.nn.Parameter(torch.empty(dims, dims))
-        self.W_V = torch.nn.Parameter(torch.empty(dims, dims))
-        torch.nn.init.normal_(self.W_Q, std=0.01)
-        torch.nn.init.normal_(self.W_K, std=0.01)
-        torch.nn.init.normal_(self.W_V, std=0.01)
-
     def start(self):
-        """For MaskedSelfAttention, the "state" is the list of previous
-        inputs, which is initially empty."""
-
+        """The state is the list of previous inputs, which is initially empty."""
         return torch.empty(0, self.dims)
 
     def step(self, prev_inps, inp):
@@ -442,19 +437,19 @@ class MaskedSelfAttention(torch.nn.Module):
         
         return (inputs, output)
     
-    def sequence(self, inputs):
+    def forward(self, inputs):
         """Argument:
-            inputs: Input vectors, including <BOS> but not <EOS> (Tensor of size n,d)
+            inputs: Input vectors (tensor of size n,d)
 
         Return:
-            Output vectors (Tensor of size n,d)
+            Output vectors (tensor of size n,d)
         """
 
-        dims = self.W_Q.size()[0]
         if inputs.ndim < 2:
             raise TypeError("inputs must have at least two axes")
-        if inputs.size()[-1] != dims:
-            raise TypeError(f"input vectors must have size {dims}")
+        n = inputs.size()[-2]
+        if inputs.size()[-1] != self.dims:
+            raise TypeError(f"input vectors must have size {self.dims}")
 
         # Linearly transform inputs in three ways to get queries, keys, values
         queries = bmv(self.W_Q, inputs)
@@ -462,9 +457,49 @@ class MaskedSelfAttention(torch.nn.Module):
         values = bmv(self.W_V, inputs)
 
         # Compute output vectors
-        outputs = attention(queries, keys, values, mask=True)
+        mask = torch.arange(n).unsqueeze(1) < torch.arange(n)
+        outputs = attention(queries, keys, values, mask=mask)
         
-        # Residual connection
+        # Residual connection (see RNN for explanation)
         outputs = outputs + inputs
         
         return outputs
+
+class CrossAttentionLayer(AttentionLayer):
+    """Cross-attention layer, for use in a decoder.
+
+    The constructor takes one argument:
+        dims: Size of input and output vectors (int)
+
+    The resulting object is callable (see forward()).
+    """
+    
+    def forward(self, finputs, einputs):
+        """Arguments:
+            finputs: Source-side input vectors (tensor of size n,d)
+            einputs: Target-side input vector or vectors (tensor of size d or m,d)
+
+        Return:
+            Output vectors (tensor of size d or m,d)
+        """
+
+        if finputs.ndim < 2:
+            raise TypeError("finputs must have at least two axes")
+        if finputs.size()[-1] != self.dims:
+            raise TypeError(f"finputs vectors must have size {self.dims}")
+        if einputs.size()[-1] != self.dims:
+            raise TypeError(f"einputs vectors must have size {self.dims}")
+
+        # Linearly transform inputs in three ways to get queries, keys, values
+        queries = bmv(self.W_Q, einputs)
+        keys = bmv(self.W_K, finputs)
+        values = bmv(self.W_V, finputs)
+
+        # Compute output vectors
+        outputs = attention(queries, keys, values)
+        
+        # Residual connection (see RNN for explanation)
+        outputs = outputs + einputs
+        
+        return outputs
+    
