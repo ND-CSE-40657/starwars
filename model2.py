@@ -1,11 +1,15 @@
 import torch
-torch.set_default_device('cpu')
-
 import math, collections.abc, random, copy
-
 from layers import *
 
+torch.set_default_device('cpu') # don't use GPU
+#torch.set_default_device('cuda') # use GPU
+
+# The maximum length of any sentence, including <BOS> and <EOS>
+max_len = 100
+
 def progress(iterable):
+    """Iterate over `iterable`, showing progress if appropriate."""
     import os, sys
     if os.isatty(sys.stderr.fileno()):
         try:
@@ -48,11 +52,11 @@ class Vocab(collections.abc.MutableSet):
         return self.num_to_word[num]
 
 def read_parallel(filename):
-    """Read data from the file named by 'filename.'
+    """Read data from the file named by `filename`.
 
     The file should be in the format:
 
-    我 不 喜 欢 沙 子 \t i do n't like sand
+    我 不 喜 欢 沙 子 \t I do n't like sand
 
     where \t is a tab character.
 
@@ -68,7 +72,7 @@ def read_parallel(filename):
     return data
 
 def read_mono(filename):
-    """Read sentences from the file named by 'filename.' 
+    """Read sentences from the file named by `filename`.
 
     Argument: filename
     Returns: list of lists of strings. <BOS> and <EOS> are added to each sentence.
@@ -79,42 +83,48 @@ def read_mono(filename):
         data.append(words)
     return data
     
+# The original Model 2 had two tables t(e|f) and a(j|i). Here, we
+# factor t(e|f) into two matrices (called U and V in the notes), and
+# a(j|i) into two matrices M and Nᵀ. This makes the whole model break
+# into two parts, an encoder (V and N) and a decoder (U and M). V[f]
+# can be thought of as a vector representation of f, and U[:,e] can be
+# thought of as a vector representation of e. Likewise, N[j] can be
+# thought of as a vector representation of j, and M[i] can be thought
+# of as a vector representation of i.
+    
 class Encoder(torch.nn.Module):
     """IBM Model 2 encoder."""
-    
+
     def __init__(self, vocab_size, dims):
         super().__init__()
         self.emb = Embedding(vocab_size, dims) # This is called V in the notes
+        self.pos = Embedding(max_len, dims) # N
 
     def forward(self, fnums):
         """Encode a Chinese sentence.
 
         Argument: Chinese sentence (list of n ints)
-        Returns: Chinese word encodings (Tensor of size n,d)"""
-        
-        return self.emb(fnums)
+        Returns: Chinese word encodings (Tensor of size n,2d)"""
+
+        # Pack femb (word embeddings) and fpos (position embeddings) into single vector
+        femb = self.emb(fnums)
+        fpos = self.pos(torch.arange(len(fnums)))
+        return torch.cat([femb, fpos], dim=-1)
 
 class Decoder(torch.nn.Module):
     """IBM Model 2 decoder."""
     
     def __init__(self, dims, vocab_size):
         super().__init__()
-
-        # The original Model 2 had a table a(j|i).
-        # Just as we factored t(e|f) into two matrices U and V in the notes,
-        # so we factor a(j|i) into two matrices, fpos and epos.
-        # We can think of fpos[j] as a vector representation of the number j,
-        # and similarly epos[i] as a vector representation of the number i.
-        
-        self.fpos = Embedding(100, dims)
-        self.epos = Embedding(100, dims)
+        self.dims = dims
+        self.pos = Embedding(max_len, dims) # M
         self.out = SoftmaxLayer(dims, vocab_size) # This is called U in the notes
 
     def start(self, fencs):
         """Return the initial state of the decoder.
 
         Argument:
-        - fencs (Tensor of size n,d): Source encodings
+        - fencs (Tensor of size n,2d): Source encodings
 
         For Model 2, the state is just the English position, but in
         general it could be anything. If you add an RNN to the
@@ -138,14 +148,18 @@ class Decoder(torch.nn.Module):
         """
         
         (fencs, i) = state
-        n = len(fencs)
+
+        # Unpack fencs into fembs (word embeddings) and fpos (position embeddings)
+        d = self.dims
+        fembs = fencs[...,:d]           # n,d
+        fpos = fencs[...,d:]            # n,d
 
         # Compute t(e | f_j) for all j
-        v = self.out(fencs)             # n,len(evocab)
+        v = self.out(fembs)             # n,len(evocab)
 
         # Compute queries and keys based purely on positions
-        q = self.epos(i)                # d
-        k = self.fpos(torch.arange(n))  # n,d
+        q = self.pos(i)                 # d
+        k = fpos                        # n,d
 
         # Compute expected output
         o = attention(q, k, v)          # len(evocab)
@@ -156,16 +170,18 @@ class Decoder(torch.nn.Module):
         """Compute probability distributions for an English sentence.
 
         Arguments:
-            fencs: Chinese word encodings (Tensor of size n,d)
+            fencs: Chinese word encodings (Tensor of size n,2d)
             enums: English words, including <BOS> but not <EOS> (list of m ints)
 
-        Returns: Matrix of log-probabilities (Tensor of size m,d)
+        Returns: Matrix of log-probabilities (Tensor of size m,len(evocab))
         """
-        n = len(fencs)
+        d = self.dims
+        fembs = fencs[...,:d]           # n,d
+        fpos = fencs[...,d:]            # n,d
         m = len(enums)
-        v = self.out(fencs)             # n,len(evocab)
-        q = self.epos(torch.arange(m))  # m,d
-        k = self.fpos(torch.arange(n))  # n,d
+        v = self.out(fembs)             # n,len(evocab)
+        q = self.pos(torch.arange(m))   # m,d
+        k = fpos                        # n,d
         o = attention(q, k, v)          # m,len(evocab)
         return o
 
@@ -222,7 +238,7 @@ class Model(torch.nn.Module):
         state = self.decoder.start(fencs)
         ewords = []
         enum = self.evocab.numberize('<BOS>')
-        for i in range(100):
+        for i in range(max_len-1):
             (state, elogprobs) = self.decoder.step(state, enum)
             enum = torch.argmax(elogprobs).item()
             eword = self.evocab.denumberize(enum)
