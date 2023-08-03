@@ -172,97 +172,61 @@ class Model(torch.nn.Module):
             ewords.append(eword)
         return ewords
 
-if __name__ == "__main__":
-    import argparse, sys
+def train(traindata, devdata):
+    fvocab = Vocab()
+    evocab = Vocab()
+    for fwords, ewords in traindata:
+        fvocab |= fwords
+        evocab |= ewords
+
+    model = Model(fvocab, 64, evocab) # try other values
     
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--train', type=str, help='training data')
-    parser.add_argument('--dev', type=str, help='development data')
-    parser.add_argument('infile', nargs='?', type=str, help='test data to translate')
-    parser.add_argument('-o', '--outfile', type=str, help='write translations to file')
-    parser.add_argument('--load', type=str, help='load model from file')
-    parser.add_argument('--save', type=str, help='save model in file')
-    args = parser.parse_args()
+    opt = torch.optim.Adam(model.parameters(), lr=0.0003)
 
-    if args.train:
-        # Read training data and create vocabularies
-        traindata = read_parallel(args.train)
+    best_dev_loss = None
+    for epoch in range(10):
+        random.shuffle(traindata)
 
-        fvocab = Vocab()
-        evocab = Vocab()
-        for fwords, ewords in traindata:
-            fvocab |= fwords
-            evocab |= ewords
+        ### Update model on train
 
-        # Create model
-        m = Model(fvocab, 64, evocab) # try increasing 64 to 128 or 256
-        
-        if args.dev is None:
-            print('error: --dev is required', file=sys.stderr)
-            sys.exit()
-        devdata = read_parallel(args.dev)
-            
-    elif args.load:
-        if args.save:
-            print('error: --save can only be used with --train', file=sys.stderr)
-            sys.exit()
-        if args.dev:
-            print('error: --dev can only be used with --train', file=sys.stderr)
-            sys.exit()
-        m = torch.load(args.load)
+        train_loss = 0.
+        train_ewords = 0
+        for fwords, ewords in progress(traindata):
+            loss = -model.logprob(fwords, ewords)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            train_loss += loss.item()
+            train_ewords += len(ewords)-1 # includes EOS but not BOS
 
-    else:
-        print('error: either --train or --load is required', file=sys.stderr)
-        sys.exit()
+        ### Validate on dev set and print out a few translations
 
-    if args.infile and not args.outfile:
-        print('error: -o is required', file=sys.stderr)
-        sys.exit()
+        dev_loss = 0.
+        dev_ewords = 0
+        for line_num, (fwords, ewords) in enumerate(devdata):
+            dev_loss -= model.logprob(fwords, ewords).item()
+            dev_ewords += len(ewords)-1 # includes EOS but not BOS
+            if line_num < 10:
+                translation = model.translate(fwords)
+                print(' '.join(translation))
 
-    if args.train:
-        opt = torch.optim.Adam(m.parameters(), lr=0.0003)
+        if best_dev_loss is None or dev_loss < best_dev_loss:
+            best_model = copy.deepcopy(model)
+            best_dev_loss = dev_loss
 
-        best_dev_loss = None
-        for epoch in range(10):
-            random.shuffle(traindata)
+        print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)}', flush=True)
 
-            ### Update model on train
+    return best_model
 
-            train_loss = 0.
-            train_ewords = 0
-            for fwords, ewords in progress(traindata):
-                loss = -m.logprob(fwords, ewords)
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
-                train_loss += loss.item()
-                train_ewords += len(ewords) # includes EOS
+if __name__ == "__main__":
+    traindata = read_parallel('data/small.zh', 'data/small.en')
+    devdata = read_parallel('data/dev.zh', 'data/dev.reference.en')
+    model = train(traindata, devdata)
+    
+    #model = torch.load('mymodel.pt')
+    
+    torch.save(model, 'mymodel.pt')
 
-            ### Validate on dev set and print out a few translations
-            
-            dev_loss = 0.
-            dev_ewords = 0
-            for line_num, (fwords, ewords) in enumerate(devdata):
-                dev_loss -= m.logprob(fwords, ewords).item()
-                dev_ewords += len(ewords) # includes EOS
-                if line_num < 10:
-                    translation = m.translate(fwords)
-                    print(' '.join(translation))
-
-            if best_dev_loss is None or dev_loss < best_dev_loss:
-                best_model = copy.deepcopy(m)
-                if args.save:
-                    torch.save(m, args.save)
-                best_dev_loss = dev_loss
-
-            print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)}', flush=True)
-            
-        m = best_model
-
-    ### Translate test set
-
-    if args.infile:
-        with open(args.outfile, 'w') as outfile:
-            for fwords in read_mono(args.infile):
-                translation = m.translate(fwords)
-                print(' '.join(translation), file=outfile)
+    testdata = read_mono('data/test.zh')
+    testoutputs = [model.translate(fwords) for fwords in testdata]
+    write_mono(testoutputs, 'test.model2.en')

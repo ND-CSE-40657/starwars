@@ -8,7 +8,7 @@ def progress(iterable):
     if os.isatty(sys.stderr.fileno()):
         try:
             import tqdm
-            return tqdm.tqdm(iterable)
+            return tqdm.tqdm(iterable, file=sys.stdout, mininterval=60)
         except ImportError:
             return iterable
     else:
@@ -45,21 +45,18 @@ class Vocab(collections.abc.MutableSet):
         """Convert a number into a word."""
         return self.num_to_word[num]
 
-def read_parallel(filename):
-    """Read data from the file named by `filename`.
+def read_parallel(ffilename, efilename):
+    """Read data from the files named by `ffilename` and `efilename`.
 
-    The file should be in the format:
+    The files should have the same number of lines.
 
-    我 不 喜 欢 沙 子 \t I do n't like sand
-
-    where \t is a tab character.
-
-    Argument: filename
+    Arguments:
+      - ffilename: str
+      - efilename: str
     Returns: list of pairs of lists of strings. <BOS> and <EOS> are added to all sentences.
     """
     data = []
-    for line in open(filename):
-        fline, eline = line.split('\t')
+    for (fline, eline) in zip(open(ffilename), open(efilename)):
         fwords = ['<BOS>'] + fline.split() + ['<EOS>']
         ewords = ['<BOS>'] + eline.split() + ['<EOS>']
         data.append((fwords, ewords))
@@ -76,3 +73,16 @@ def read_mono(filename):
         words = ['<BOS>'] + line.split() + ['<EOS>']
         data.append(words)
     return data
+
+def write_mono(data, filename):
+    """Write sentences to the file named by `filename`.
+
+    Arguments:
+    - data: list of lists of strings. <BOS> and <EOS> are stripped off.
+    - filename: str
+    """
+    with open(filename, 'w') as outfile:
+        for words in data:
+            if len(words) > 0 and words[0] == '<BOS>': words.pop(0)
+            if len(words) > 0 and words[-1] == '<EOS>': words.pop(-1)
+            print(' '.join(words), file=outfile)
