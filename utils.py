@@ -4,14 +4,10 @@ import collections.abc
 
 def progress(iterable):
     """Iterate over `iterable`, showing progress if appropriate."""
-    import os, sys
-    if os.isatty(sys.stderr.fileno()):
-        try:
-            import tqdm
-            return tqdm.tqdm(iterable, file=sys.stdout, mininterval=60)
-        except ImportError:
-            return iterable
-    else:
+    try:
+        import tqdm
+        return tqdm.tqdm(iterable, disable=None)
+    except ImportError:
         return iterable
 
 class Vocab(collections.abc.MutableSet):
@@ -27,6 +23,8 @@ class Vocab(collections.abc.MutableSet):
         self.word_to_num[word] = num
     def discard(self, word):
         raise NotImplementedError()
+    def update(self, words):
+        self |= words
     def __contains__(self, word):
         return word in self.word_to_num
     def __len__(self):
