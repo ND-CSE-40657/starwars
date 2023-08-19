@@ -1,13 +1,29 @@
 import torch
-import math, random, copy
+import math, random, copy, sys, os
 from layers import *
 from utils import *
+
+# Directories in GitHub repository
+datadir = './data'
+libdir = '.'
+outdir = '.'
+
+# Directories on Kaggle
+#datadir = '/kaggle/input/star-wars-chinese-english/data'
+#libdir = '/kaggle/input/star-wars-chinese-english'
+#outdir = '/kaggle/working'
+
+sys.path.append(libdir)
+
+# Which training set to use
+trainname = 'small'
+#trainname = 'large'
 
 torch.set_default_device('cpu') # don't use GPU
 #torch.set_default_device('cuda') # use GPU
 
 # The maximum length of any sentence, including <BOS> and <EOS>
-max_len = 100
+max_len = 256
 
 # The original Model 2 had two tables t(e|f) and a(j|i). Here, we
 # factor t(e|f) into two matrices (called U and V in the notes), and
@@ -208,25 +224,26 @@ def train(traindata, devdata):
             dev_ewords += len(ewords)-1 # includes EOS but not BOS
             if line_num < 10:
                 translation = model.translate(fwords)
-                print(' '.join(translation))
+                print(' '.join(translation), file=sys.stderr, flush=True)
 
         if best_dev_loss is None or dev_loss < best_dev_loss:
             best_model = copy.deepcopy(model)
             best_dev_loss = dev_loss
 
-        print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)}', flush=True)
+        print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)}', file=sys.stderr, flush=True)
 
     return best_model
 
 if __name__ == "__main__":
-    traindata = read_parallel('data/small.zh', 'data/small.en')
-    devdata = read_parallel('data/dev.zh', 'data/dev.reference.en')
+    traindata = read_parallel(os.path.join(datadir, f'{trainname}.zh'),
+                              os.path.join(datadir, f'{trainname}.en'))
+    devdata = read_parallel(os.path.join(datadir, 'dev.zh'),
+                            os.path.join(datadir, 'dev.reference.en'))
     model = train(traindata, devdata)
     
-    #model = torch.load('mymodel.pt')
-    
-    torch.save(model, 'mymodel.pt')
+    #model = torch.load(os.path.join(outdir, 'mymodel.pt'))
+    torch.save(model, os.path.join(outdir, 'mymodel.pt'))
 
-    testdata = read_mono('data/test.zh')
-    testoutputs = [model.translate(fwords) for fwords in testdata]
-    write_mono(testoutputs, 'test.model2.en')
+    testinputs = read_mono(os.path.join(datadir, 'test.zh'))
+    testoutputs = [model.translate(fwords) for fwords in testinputs]
+    write_mono(testoutputs, os.path.join(outdir, 'test.model2.en'))
