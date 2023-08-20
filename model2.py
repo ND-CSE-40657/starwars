@@ -1,7 +1,5 @@
 import torch
 import math, random, copy, sys, os
-from layers import *
-from utils import *
 
 # Directories in GitHub repository
 datadir = './data'
@@ -14,6 +12,8 @@ outdir = '.'
 #outdir = '/kaggle/working'
 
 sys.path.append(libdir)
+from layers import *
+from utils import *
 
 # Which training set to use
 trainname = 'small'
