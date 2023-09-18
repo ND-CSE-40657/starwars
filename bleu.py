@@ -38,6 +38,9 @@ def score(test_sents, ref_sents, n=4):
     c = zero()
     for t, g in zip(test_sents, ref_sents):
         c += count(t, g, n=n)
+
+    if c['guess',1] == 0:
+        return 0.
         
     b = 1.
     for i in range(1, n+1):

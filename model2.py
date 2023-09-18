@@ -201,7 +201,7 @@ def train(train_data, dev_data):
     opt = torch.optim.Adam(model.parameters(), lr=0.0003)
 
     best_dev_bleu = None
-    for epoch in range(2):
+    for epoch in range(10):
         random.shuffle(train_data)
 
         ### Update model on train
