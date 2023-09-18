@@ -14,6 +14,7 @@ outdir = '.'
 sys.path.append(libdir)
 from layers import *
 from utils import *
+import bleu
 
 # Which training set to use
 trainname = 'small'
@@ -199,7 +200,7 @@ def train(traindata, devdata):
     
     opt = torch.optim.Adam(model.parameters(), lr=0.0003)
 
-    best_dev_loss = None
+    best_dev_bleu = None
     for epoch in range(10):
         random.shuffle(traindata)
 
@@ -219,18 +220,22 @@ def train(traindata, devdata):
 
         dev_loss = 0.
         dev_ewords = 0
+        dev_translations = []
         for line_num, (fwords, ewords) in enumerate(devdata):
             dev_loss -= model.logprob(fwords, ewords).item()
             dev_ewords += len(ewords)-1 # includes EOS but not BOS
+
+            translation = model.translate(fwords)
+            dev_translations.append(translation)
             if line_num < 10:
-                translation = model.translate(fwords)
                 print(' '.join(translation), file=sys.stderr, flush=True)
 
-        if best_dev_loss is None or dev_loss < best_dev_loss:
+        dev_bleu = bleu.score(dev_translations, [ewords for (_, ewords) in devdata])
+        if best_dev_bleu is None or dev_bleu > best_dev_bleu:
             best_model = copy.deepcopy(model)
-            best_dev_loss = dev_loss
+            best_dev_bleu = dev_bleu
 
-        print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)}', file=sys.stderr, flush=True)
+        print(f'[{epoch+1}] train_loss={train_loss} train_ppl={math.exp(train_loss/train_ewords)} dev_ppl={math.exp(dev_loss/dev_ewords)} dev_bleu={dev_bleu}', file=sys.stderr, flush=True)
 
     return best_model
 
