@@ -2,23 +2,23 @@ import torch
 import math, random, copy, sys, os
 
 # Directories in GitHub repository
-datadir = './data'
-libdir = '.'
-outdir = '.'
+data_dir = './data'
+lib_dir = '.'
+out_dir = '.'
 
 # Directories on Kaggle
-#datadir = '/kaggle/input/star-wars-chinese-english/data'
-#libdir = '/kaggle/input/star-wars-chinese-english'
-#outdir = '/kaggle/working'
+#data_dir = '/kaggle/input/star-wars-chinese-english/data'
+#lib_dir = '/kaggle/input/star-wars-chinese-english'
+#out_dir = '/kaggle/working'
 
-sys.path.append(libdir)
+sys.path.append(lib_dir)
 from layers import *
 from utils import *
 import bleu
 
 # Which training set to use
-trainname = 'small'
-#trainname = 'large'
+train_name = 'small'
+#train_name = 'large'
 
 torch.set_default_device('cpu') # don't use GPU
 #torch.set_default_device('cuda') # use GPU
@@ -189,10 +189,10 @@ class Model(torch.nn.Module):
             ewords.append(eword)
         return ewords
 
-def train(traindata, devdata):
+def train(train_data, dev_data):
     fvocab = Vocab()
     evocab = Vocab()
-    for fwords, ewords in traindata:
+    for fwords, ewords in train_data:
         fvocab |= fwords
         evocab |= ewords
 
@@ -201,14 +201,14 @@ def train(traindata, devdata):
     opt = torch.optim.Adam(model.parameters(), lr=0.0003)
 
     best_dev_bleu = None
-    for epoch in range(10):
-        random.shuffle(traindata)
+    for epoch in range(2):
+        random.shuffle(train_data)
 
         ### Update model on train
 
         train_loss = 0.
         train_ewords = 0
-        for fwords, ewords in progress(traindata):
+        for fwords, ewords in progress(train_data):
             loss = -model.logprob(fwords, ewords)
             opt.zero_grad()
             loss.backward()
@@ -220,17 +220,18 @@ def train(traindata, devdata):
 
         dev_loss = 0.
         dev_ewords = 0
-        dev_translations = []
-        for line_num, (fwords, ewords) in enumerate(devdata):
+        dev_outputs = []
+        for line_num, (fwords, ewords) in enumerate(dev_data):
             dev_loss -= model.logprob(fwords, ewords).item()
             dev_ewords += len(ewords)-1 # includes EOS but not BOS
 
-            translation = model.translate(fwords)
-            dev_translations.append(translation)
+            output = model.translate(fwords)
+            dev_outputs.append(output)
             if line_num < 10:
-                print(' '.join(translation), file=sys.stderr, flush=True)
+                print(' '.join(output), file=sys.stderr, flush=True)
 
-        dev_bleu = bleu.score(dev_translations, [ewords for (_, ewords) in devdata])
+        dev_refs = [ewords for (_, ewords) in dev_data]
+        dev_bleu = bleu.score(dev_outputs, dev_refs)
         if best_dev_bleu is None or dev_bleu > best_dev_bleu:
             best_model = copy.deepcopy(model)
             best_dev_bleu = dev_bleu
@@ -240,15 +241,18 @@ def train(traindata, devdata):
     return best_model
 
 if __name__ == "__main__":
-    traindata = read_parallel(os.path.join(datadir, f'{trainname}.zh'),
-                              os.path.join(datadir, f'{trainname}.en'))
-    devdata = read_parallel(os.path.join(datadir, 'dev.zh'),
-                            os.path.join(datadir, 'dev.reference.en'))
-    model = train(traindata, devdata)
+    train_data = read_parallel(os.path.join(data_dir, f'{train_name}.zh'),
+                              os.path.join(data_dir, f'{train_name}.en'))
+    dev_data = read_parallel(os.path.join(data_dir, 'dev.zh'),
+                            os.path.join(data_dir, 'dev.reference.en'))
+    model = train(train_data, dev_data)
     
-    #model = torch.load(os.path.join(outdir, 'mymodel.pt'))
-    torch.save(model, os.path.join(outdir, 'mymodel.pt'))
+    #model = torch.load(os.path.join(out_dir, 'mymodel.pt'))
+    torch.save(model, os.path.join(out_dir, 'mymodel.pt'))
 
-    testinputs = read_mono(os.path.join(datadir, 'test.zh'))
-    testoutputs = [model.translate(fwords) for fwords in testinputs]
-    write_mono(testoutputs, os.path.join(outdir, 'test.model2.en'))
+    test_inputs = read_mono(os.path.join(data_dir, 'test.zh'))
+    test_outputs = [model.translate(fwords) for fwords in test_inputs]
+    test_refs = read_mono(os.path.join(data_dir, 'test.reference.en'))
+    write_mono(test_outputs, os.path.join(out_dir, 'test.model2.en'))
+
+    print(f'[done] test_bleu={bleu.score(test_outputs, test_refs)}')
