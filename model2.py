@@ -17,8 +17,7 @@ from utils import *
 import bleu
 
 # Which training set to use
-train_name = 'small'
-#train_name = 'large'
+train_name = 'train'
 
 torch.set_default_device('cpu') # don't use GPU
 #torch.set_default_device('cuda') # use GPU
@@ -41,7 +40,7 @@ class Encoder(torch.nn.Module):
     def __init__(self, vocab_size, dims):
         super().__init__()
         self.emb = Embedding(vocab_size, dims) # This is called V in the notes
-        self.pos = Embedding(max_len, dims) # N
+        self.pos = Embedding(max_len, dims)    # This is called K in the notes
 
     def forward(self, fnums):
         """Encode a Chinese sentence.
@@ -60,7 +59,7 @@ class Decoder(torch.nn.Module):
     def __init__(self, dims, vocab_size):
         super().__init__()
         self.dims = dims
-        self.pos = Embedding(max_len, dims) # M
+        self.pos = Embedding(max_len, dims)       # This is called Q in the notes
         self.out = SoftmaxLayer(dims, vocab_size) # This is called U in the notes
 
     def start(self, fencs):
@@ -70,15 +69,16 @@ class Decoder(torch.nn.Module):
         - fencs (Tensor of size n,2d): Source encodings
 
         For Model 2, the state is just the English position, but in
-        general it could be anything. If you add an RNN to the
-        decoder, you should call the RNN's start() method here.
+        general it could be anything. If you add an RNN or
+        MaskedSelfAttention to the decoder, you should call its
+        start() method here.
         """
         
         return (fencs, 0)
 
     def step(self, state, enum):
-        """Input an English word (enum) and output the log-probability
-        distribution over the next English word.
+        """Input a state and an English word (enum) and output the new state
+        and log-probability distribution over the next English word.
 
         Arguments:
             state: Old state of decoder
@@ -122,6 +122,12 @@ class Decoder(torch.nn.Module):
         fembs = fencs[...,:d]           # n,d
         fpos = fencs[...,d:]            # n,d
         m = len(enums)
+        # There's actually a bug in the next line: self.out returns
+        # log-probabilities, but to approximate the original Model 2,
+        # they should be probabilities. Since the assignment is live,
+        # I didn't fix the bug, but am noting it in case it causes
+        # confusion. When you modify this for Part 1, the bug
+        # automatically goes away.
         v = self.out(fembs)             # n,len(evocab)
         q = self.pos(torch.arange(m))   # m,d
         k = fpos                        # n,d
